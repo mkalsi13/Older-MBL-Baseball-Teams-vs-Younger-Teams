@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Do Older Baseball Teams Perform Better?</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 35px;
+      color: #111;
+      background: white;
+      line-height: 1.5;
+      max-width: 1100px;
+    }
+
+    h1 {
+      margin-bottom: 10px;
+      font-size: 28px;
+    }
+
+    #controls {
+      margin: 15px 0 25px 0;
+      display: flex;
+      gap: 32px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .toggle button {
+      padding: 8px 14px;
+      border: 1px solid #aaa;
+      background: #eee;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .toggle button.active {
+      background: #4287f5;
+      color: white;
+      border-color: #4287f5;
+    }
+
+    select {
+      padding: 7px 12px;
+      border: 1px solid #aaa;
+      background: white;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    #viz {
+      border: 1px solid #eee;
+      margin-top: 5px;
+      display: block;
+    }
+
+    #tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      padding: 6px 12px;
+      font-size: 13px;
+      opacity: 0;
+      box-shadow: 0 0 6px rgba(0,0,0,0.2);
+    }
+
+    .annotation-text {
+      font-size: 14px;
+      font-weight: bold;
+      fill: #000;
+    }
+
+    .annotation-line {
+      stroke: #000;
+      stroke-width: 1.5;
+      stroke-dasharray: 4 3;
+    }
+
+    figcaption {
+      margin-top: 10px;
+      font-size: 14px;
+      color: #555;
+    }
+
+  </style>
+</head>
+
+<body>
+
+<h1>Do Older Baseball Teams Perform Better?</h1>
+
+<p>
+  This explorable visualization examines whether older, more experienced MLB teams perform better
+  than younger teams. Using the Baseball Databank from 1970–2015, we estimate each team’s
+  <strong>average roster age</strong> (weighted by plate appearances) and compare it to two
+  performance metrics: <strong>runs per game</strong> and <strong>win percentage</strong>.
+</p>
+
+<div id="controls">
+  <div>
+    <strong>Metric:</strong>
+    <span class="toggle">
+      <button id="btn-runs" class="active">Runs per Game</button>
+      <button id="btn-wins">Win %</button>
+    </span>
+  </div>
+
+  <div>
+    <strong>Era:</strong>
+    <select id="era-select">
+      <option value="all">All Seasons (1970–2015)</option>
+      <option value="1970-1989">1970–1989</option>
+      <option value="1990-2009">1990–2009</option>
+      <option value="2010-2015">2010–2015</option>
+    </select>
+  </div>
+</div>
+
+<figure>
+  <svg id="viz" width="1000" height="580"></svg>
+  <figcaption>
+    Each point represents the average performance of all teams whose roster age rounds to that value.
+    The highlighted point marks where teams tend to peak for the selected metric.
+  </figcaption>
+</figure>
+
+<h2>What the results show</h2>
+
+<p>
+  Across all MLB seasons from 1970–2015, team performance rises as rosters get older.
+  Offensively, teams tend to score more runs per game as their average age moves from 25 into the late 20s.
+  The curve reaches its highest point at roughly <strong>age 32</strong>, showing that teams of this age
+  produce the most runs on average. After age 32, offensive performance declines.
+</p>
+
+<p>
+  When looking at win percentage, the pattern is similar. Younger teams win less often, while teams with
+  average ages in the late 20s to early 30s win the most games. After about <strong>age 33</strong>,
+  older rosters begin to decline in win rate.
+</p>
+
+<p>
+  Overall, the data suggests that teams built around players in their late 20s to early 30s are in their
+  collective “prime,” balancing physical ability and experience. Both very young teams and significantly
+  older teams tend to underperform compared to this peak window.
+</p>
+
+<div id="tooltip"></div>
+
+<script>
+// ------------------------------------------------------
+// CHART SETUP
+// ------------------------------------------------------
+const svg = d3.select("#viz");
+const width = +svg.attr("width");
+const height = +svg.attr("height");
+
+const margin = { top: 40, right: 30, bottom: 60, left: 75 };
+const innerWidth = width - margin.left - margin.right;
+const innerHeight = height - margin.top - margin.bottom;
+
+const g = svg.append("g")
+  .attr("transform", `translate(${margin.left},${margin.top})`);
+
+const xScale = d3.scaleLinear().range([0, innerWidth]);
+const yScale = d3.scaleLinear().range([innerHeight, 0]);
+
+const xAxisG = g.append("g")
+  .attr("transform", `translate(0,${innerHeight})`)
+  .attr("font-size", "16px");
+
+const yAxisG = g.append("g")
+  .attr("font-size", "16px");
+
+g.append("text")
+  .attr("x", innerWidth / 2)
+  .attr("y", innerHeight + 45)
+  .attr("text-anchor", "middle")
+  .style("font-size", "18px")
+  .text("Average Team Age");
+
+const yLabel = g.append("text")
+  .attr("transform", "rotate(-90)")
+  .attr("x", -innerHeight / 2)
+  .attr("y", -55)
+  .attr("text-anchor", "middle")
+  .style("font-size", "18px")
+  .text("Runs per Game");
+
+const lineGroup = g.append("path")
+  .attr("fill", "none")
+  .attr("stroke", "#4287f5")
+  .attr("stroke-width", 3);
+
+const pointsGroup = g.append("g");
+const annotationGroup = g.append("g").attr("class", "annotation");
+const tooltip = d3.select("#tooltip");
+
+let metric = "runs_per_game";
+let fullData = [];
+
+// ------------------------------------------------------
+// LOAD DATA
+// ------------------------------------------------------
+d3.csv("team_age_performance.csv", d3.autoType).then(data => {
+  fullData = data;
+
+  xScale.domain(d3.extent(fullData, d => d.avg_age));
+
+  window.extents = {
+    runs_per_game: d3.extent(fullData, d => d.runs_per_game),
+    win_pct:       d3.extent(fullData, d => d.win_pct)
+  };
+
+  yScale.domain(window.extents.runs_per_game);
+
+  xAxisG.call(d3.axisBottom(xScale));
+  yAxisG.call(d3.axisLeft(yScale));
+
+  setupControls();
+  drawChart();
+});
+
+// ------------------------------------------------------
+// UI CONTROLS
+// ------------------------------------------------------
+function setupControls() {
+
+  document.getElementById("btn-runs").onclick = () => {
+    metric = "runs_per_game";
+    document.getElementById("btn-runs").classList.add("active");
+    document.getElementById("btn-wins").classList.remove("active");
+    yLabel.text("Runs per Game");
+    yScale.domain(window.extents.runs_per_game);
+    yAxisG.call(d3.axisLeft(yScale));
+    drawChart();
+  };
+
+  document.getElementById("btn-wins").onclick = () => {
+    metric = "win_pct";
+    document.getElementById("btn-wins").classList.add("active");
+    document.getElementById("btn-runs").classList.remove("active");
+    yLabel.text("Win Percentage");
+    yScale.domain(window.extents.win_pct);
+    yAxisG.call(d3.axisLeft(yScale));
+    drawChart();
+  };
+
+  document.getElementById("era-select").onchange = drawChart;
+}
+
+// ------------------------------------------------------
+// DATA AGGREGATION
+// ------------------------------------------------------
+function filterByEra() {
+  const era = document.getElementById("era-select").value;
+
+  let start = 1970, end = 2015;
+  if (era === "1970-1989") start = 1970, end = 1989;
+  if (era === "1990-2009") start = 1990, end = 2009;
+  if (era === "2010-2015") start = 2010, end = 2015;
+
+  return fullData.filter(d => d.yearID >= start && d.yearID <= end);
+}
+
+function aggregate(data) {
+  const grouped = d3.rollups(
+    data,
+    v => ({
+      runs_per_game: d3.mean(v, d => d.runs_per_game),
+      win_pct:       d3.mean(v, d => d.win_pct),
+      count:         v.length
+    }),
+    d => Math.round(d.avg_age)
+  );
+
+  return grouped
+    .map(([age, vals]) => ({ age, ...vals }))
+    .filter(d => d.count >= 3)
+    .sort((a, b) => a.age - b.age);
+}
+
+// ------------------------------------------------------
+// DRAW CHART
+// ------------------------------------------------------
+function drawChart() {
+
+  const data = aggregate(filterByEra());
+
+  const line = d3.line()
+    .x(d => xScale(d.age))
+    .y(d => yScale(d[metric]))
+    .curve(d3.curveMonotoneX);
+
+  lineGroup.datum(data)
+    .transition().duration(400)
+    .attr("d", line);
+
+  const pts = pointsGroup.selectAll("circle")
+    .data(data, d => d.age);
+
+  pts.exit().remove();
+
+  pts.enter().append("circle")
+    .attr("r", 8)
+    .attr("fill", "#4287f5")
+    .merge(pts)
+    .transition().duration(250)
+    .attr("cx", d => xScale(d.age))
+    .attr("cy", d => yScale(d[metric]));
+
+  pointsGroup.selectAll("circle")
+    .on("mousemove", (event, d) => {
+      tooltip.style("opacity", 1)
+        .html(
+          `<strong>Age ${d.age}</strong><br>` +
+          `Runs/Game: ${d.runs_per_game.toFixed(2)}<br>` +
+          `Win %: ${d.win_pct.toFixed(3)}<br>` +
+          `Teams: ${d.count}`
+        )
+        .style("left", (event.pageX + 12) + "px")
+        .style("top", (event.pageY - 35) + "px");
+    })
+    .on("mouseout", () => tooltip.style("opacity", 0));
+
+  drawAnnotation(data);
+}
+
+// ------------------------------------------------------
+// ANNOTATION FOR PEAK AGE
+// ------------------------------------------------------
+function drawAnnotation(data) {
+  annotationGroup.selectAll("*").remove();
+
+  if (!data.length) return;
+
+  let peak = data[0];
+
+  for (const d of data) {
+    if (d[metric] > peak[metric]) peak = d;
+  }
+
+  const x = xScale(peak.age);
+  const y = yScale(peak[metric]);
+
+  const labelY = y - 40;
+
+  // line
+  annotationGroup.append("line")
+    .attr("class", "annotation-line")
+    .attr("x1", x)
+    .attr("y1", y)
+    .attr("x2", x)
+    .attr("y2", labelY);
+
+  // text
+  const tag = metric === "runs_per_game"
+    ? `Peak offense ≈ age ${peak.age}`
+    : `Peak winning ≈ age ${peak.age}`;
+
+  annotationGroup.append("text")
+    .attr("class", "annotation-text")
+    .attr("x", x)
+    .attr("y", labelY - 5)
+    .attr("text-anchor", "middle")
+    .text(tag);
+}
+
+</script>
+</body>
+</html>
